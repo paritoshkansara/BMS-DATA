@@ -9,7 +9,7 @@
     body { background:#111; color:#eee; font-family:monospace; padding:16px; }
     h1 { color:#4af; font-size:20px; margin-bottom:4px; }
     .sub { color:#666; font-size:12px; margin-bottom:16px; }
-    .status { font-size:12px; margin-bottom:16px; }
+    .status { font-size:12px; margin-bottom:16px; padding:8px; border-radius:6px; background:#1a1a1a; }
     .connected { color:#0f0; }
     .disconnected { color:#f44; }
     .pack { background:#1a1a1a; border:1px solid #333; border-radius:8px; padding:14px; margin-bottom:12px; }
@@ -22,14 +22,37 @@
     .cell { background:#222; border-radius:4px; padding:3px 6px; font-size:11px; }
     .nodata { color:#555; font-style:italic; }
     .time { color:#444; font-size:10px; margin-top:8px; }
+    .otabox { background:#1a2a1a; border:1px solid #2a4a2a; border-radius:8px; padding:14px; margin-bottom:12px; }
+    .otabox h3 { color:#0f0; margin-bottom:10px; }
+    .btn { background:#1a3a1a; border:1px solid #0f0; color:#0f0;
+           padding:8px 16px; border-radius:6px; cursor:pointer;
+           font-family:monospace; font-size:13px; margin-right:8px; margin-bottom:8px; }
+    .btn:hover { background:#0f0; color:#000; }
+    .btn-red { background:#3a1a1a; border:1px solid #f44; color:#f44; }
+    .btn-red:hover { background:#f44; color:#000; }
+    .btn-blue { background:#1a1a3a; border:1px solid #4af; color:#4af; }
+    .btn-blue:hover { background:#4af; color:#000; }
+    .otastatus { color:#fa0; font-size:12px; margin-top:10px; min-height:18px; }
+    .otatopic { color:#444; font-size:10px; margin-top:6px; }
   </style>
 </head>
 <body>
 
 <h1>WeHear BMS Monitor</h1>
-<div class="sub">Live data from broker.hivemq.com</div>
+<div class="sub">Live data via MQTT — broker.hivemq.com</div>
 <div class="status disconnected" id="status">Connecting to broker...</div>
 
+<!-- OTA Control Box -->
+<div class="otabox">
+  <h3>Remote Firmware Update</h3>
+  <button class="btn"      onclick="sendCmd('update')">Flash New Firmware</button>
+  <button class="btn btn-red"  onclick="sendCmd('restart')">Restart ESP32</button>
+  <button class="btn btn-blue" onclick="sendCmd('status')">Get Status</button>
+  <div class="otastatus" id="otastatus">—</div>
+  <div class="otatopic" id="otatopic"></div>
+</div>
+
+<!-- Pack cards -->
 <div id="pack1" class="pack">
   <div class="ptitle">PACK 1</div>
   <div class="nodata" id="p1data">No data yet</div>
@@ -48,47 +71,79 @@
 </div>
 
 <script>
-  const client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
-  const BASE   = 'wepower/paritosh/bms';
+  var BASE   = 'wepower/paritosh/bms';
+  var client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt', {
+    clientId: 'WeHear_Web_' + Math.random().toString(16).substr(2, 8)
+  });
 
+  // ── Connection events ──────────────────
   client.on('connect', function() {
-    document.getElementById('status').textContent = 'Connected to broker — waiting for ESP32 data...';
-    document.getElementById('status').className = 'status connected';
+    document.getElementById('status').textContent = 'Connected to broker — waiting for ESP32...';
+    document.getElementById('status').className   = 'status connected';
+
+    // Subscribe to all pack data
     client.subscribe(BASE + '/pack1');
     client.subscribe(BASE + '/pack2');
     client.subscribe(BASE + '/pack3');
     client.subscribe(BASE + '/pack4');
+
+    // Subscribe to OTA status and device status
+    client.subscribe(BASE + '/ota');
+    client.subscribe(BASE + '/status');
   });
 
   client.on('error', function(err) {
     document.getElementById('status').textContent = 'Broker error: ' + err;
-    document.getElementById('status').className = 'status disconnected';
+    document.getElementById('status').className   = 'status disconnected';
   });
 
-  client.on('message', function(topic, message) {
-    const packNum = topic.slice(-1);
-    const divId   = 'p' + packNum + 'data';
-    const payload = message.toString();
+  client.on('offline', function() {
+    document.getElementById('status').textContent = 'Disconnected — reconnecting...';
+    document.getElementById('status').className   = 'status disconnected';
+  });
 
-    const data = {};
+  // ── Message handler ────────────────────
+  client.on('message', function(topic, message) {
+    var payload = message.toString();
+
+    // OTA progress messages
+    if (topic === BASE + '/ota') {
+      document.getElementById('otastatus').textContent = 'OTA: ' + payload;
+      return;
+    }
+
+    // Device status messages
+    if (topic === BASE + '/status') {
+      document.getElementById('status').textContent = 'ESP32 online — ' + payload;
+      document.getElementById('status').className   = 'status connected';
+      return;
+    }
+
+    // Pack data messages
+    var packNum = topic.slice(-1);
+    var divId   = 'p' + packNum + 'data';
+
+    // Parse key:value pairs
+    var data = {};
     payload.split(',').forEach(function(pair) {
-      const parts  = pair.split(':');
+      var parts    = pair.split(':');
       data[parts[0]] = parts[1];
     });
 
-    const now    = new Date().toLocaleTimeString();
-    const curr   = parseFloat(data.current) || 0;
-    const iColor = curr > 0 ? '#4af' : curr < 0 ? '#f80' : '#0f0';
-    const iLabel = curr > 0 ? 'CHARGING' : curr < 0 ? 'DISCHARGING' : 'IDLE';
-    const soc    = parseInt(data.soc) || 0;
-    const socColor = soc > 50 ? '#0f0' : soc > 20 ? '#fa0' : '#f44';
+    var now      = new Date().toLocaleTimeString();
+    var curr     = parseFloat(data.current) || 0;
+    var iColor   = curr > 0 ? '#4af' : curr < 0 ? '#f80' : '#0f0';
+    var iLabel   = curr > 0 ? 'CHARGING' : curr < 0 ? 'DISCHARGING' : 'IDLE';
+    var soc      = parseInt(data.soc) || 0;
+    var socColor = soc > 50 ? '#0f0' : soc > 20 ? '#fa0' : '#f44';
 
-    let cellsHtml = '';
-    for (let c = 1; c <= 16; c++) {
-      const key = 'c' + c;
+    // Build cell voltage bubbles
+    var cellsHtml = '';
+    for (var c = 1; c <= 16; c++) {
+      var key = 'c' + c;
       if (data[key]) {
-        const mv = parseInt(data[key]);
-        const cc = mv > 3400 ? '#f80' : mv < 3000 ? '#f44' : '#0f0';
+        var mv = parseInt(data[key]);
+        var cc = mv > 3400 ? '#f80' : mv < 3000 ? '#f44' : '#0f0';
         cellsHtml += '<span class="cell" style="color:' + cc + '">C' + c + ':' + mv + '</span>';
       }
     }
@@ -97,10 +152,14 @@
       '<div class="row">' +
         '<div class="card"><div class="clabel">VOLTAGE</div>' +
         '<div class="cval">' + data.voltage + 'V</div></div>' +
+
         '<div class="card"><div class="clabel">CURRENT (' + iLabel + ')</div>' +
-        '<div class="cval" style="color:' + iColor + '">' + Math.abs(curr).toFixed(2) + 'A</div></div>' +
+        '<div class="cval" style="color:' + iColor + '">' +
+        Math.abs(curr).toFixed(2) + 'A</div></div>' +
+
         '<div class="card"><div class="clabel">SOC</div>' +
         '<div class="cval" style="color:' + socColor + '">' + soc + '%</div></div>' +
+
         '<div class="card"><div class="clabel">CYCLES</div>' +
         '<div class="cval" style="color:#aaa">' + data.cycles + '</div></div>' +
       '</div>' +
@@ -108,6 +167,19 @@
       '<div class="cells">' + cellsHtml + '</div>' +
       '<div class="time">Last update: ' + now + '</div>';
   });
+
+  // ── Send command to ESP32 ──────────────
+  function sendCmd(cmd) {
+    if (!confirm('Send command to ESP32: ' + cmd + '?')) return;
+
+    if (client.connected) {
+      client.publish(BASE + '/cmd', cmd);
+      document.getElementById('otastatus').textContent =
+        'Command sent: ' + cmd + ' — waiting for response...';
+    } else {
+      alert('Not connected to broker! Please refresh the page.');
+    }
+  }
 </script>
 </body>
 </html>

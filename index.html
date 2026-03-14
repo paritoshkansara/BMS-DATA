@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>WeHear BMS</title>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <style>
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { background:#111; color:#eee; font-family:monospace; padding:16px; }
+    h1 { color:#4af; font-size:20px; margin-bottom:4px; }
+    .sub { color:#666; font-size:12px; margin-bottom:16px; }
+    .status { font-size:12px; margin-bottom:16px; }
+    .connected { color:#0f0; }
+    .disconnected { color:#f44; }
+    .pack { background:#1a1a1a; border:1px solid #333; border-radius:8px; padding:14px; margin-bottom:12px; }
+    .ptitle { color:#fa0; font-size:15px; margin-bottom:10px; }
+    .row { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
+    .card { background:#222; border-radius:6px; padding:8px 12px; min-width:90px; }
+    .clabel { color:#666; font-size:10px; }
+    .cval { font-size:18px; font-weight:bold; color:#0f0; }
+    .cells { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
+    .cell { background:#222; border-radius:4px; padding:3px 6px; font-size:11px; }
+    .nodata { color:#555; font-style:italic; }
+    .time { color:#444; font-size:10px; margin-top:8px; }
+  </style>
+</head>
+<body>
+
+<h1>WeHear BMS Monitor</h1>
+<div class="sub">Live data from broker.hivemq.com</div>
+<div class="status disconnected" id="status">Connecting to broker...</div>
+
+<div id="pack1" class="pack">
+  <div class="ptitle">PACK 1</div>
+  <div class="nodata" id="p1data">No data yet</div>
+</div>
+<div id="pack2" class="pack">
+  <div class="ptitle">PACK 2</div>
+  <div class="nodata" id="p2data">No data yet</div>
+</div>
+<div id="pack3" class="pack">
+  <div class="ptitle">PACK 3</div>
+  <div class="nodata" id="p3data">No data yet</div>
+</div>
+<div id="pack4" class="pack">
+  <div class="ptitle">PACK 4</div>
+  <div class="nodata" id="p4data">No data yet</div>
+</div>
+
+<script>
+  const client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
+  const BASE   = 'wepower/paritosh/bms';
+
+  client.on('connect', function() {
+    document.getElementById('status').textContent = 'Connected to broker — waiting for ESP32 data...';
+    document.getElementById('status').className = 'status connected';
+    client.subscribe(BASE + '/pack1');
+    client.subscribe(BASE + '/pack2');
+    client.subscribe(BASE + '/pack3');
+    client.subscribe(BASE + '/pack4');
+  });
+
+  client.on('error', function(err) {
+    document.getElementById('status').textContent = 'Broker error: ' + err;
+    document.getElementById('status').className = 'status disconnected';
+  });
+
+  client.on('message', function(topic, message) {
+    const packNum = topic.slice(-1);
+    const divId   = 'p' + packNum + 'data';
+    const payload = message.toString();
+
+    const data = {};
+    payload.split(',').forEach(function(pair) {
+      const parts  = pair.split(':');
+      data[parts[0]] = parts[1];
+    });
+
+    const now    = new Date().toLocaleTimeString();
+    const curr   = parseFloat(data.current) || 0;
+    const iColor = curr > 0 ? '#4af' : curr < 0 ? '#f80' : '#0f0';
+    const iLabel = curr > 0 ? 'CHARGING' : curr < 0 ? 'DISCHARGING' : 'IDLE';
+    const soc    = parseInt(data.soc) || 0;
+    const socColor = soc > 50 ? '#0f0' : soc > 20 ? '#fa0' : '#f44';
+
+    let cellsHtml = '';
+    for (let c = 1; c <= 16; c++) {
+      const key = 'c' + c;
+      if (data[key]) {
+        const mv = parseInt(data[key]);
+        const cc = mv > 3400 ? '#f80' : mv < 3000 ? '#f44' : '#0f0';
+        cellsHtml += '<span class="cell" style="color:' + cc + '">C' + c + ':' + mv + '</span>';
+      }
+    }
+
+    document.getElementById(divId).innerHTML =
+      '<div class="row">' +
+        '<div class="card"><div class="clabel">VOLTAGE</div>' +
+        '<div class="cval">' + data.voltage + 'V</div></div>' +
+        '<div class="card"><div class="clabel">CURRENT (' + iLabel + ')</div>' +
+        '<div class="cval" style="color:' + iColor + '">' + Math.abs(curr).toFixed(2) + 'A</div></div>' +
+        '<div class="card"><div class="clabel">SOC</div>' +
+        '<div class="cval" style="color:' + socColor + '">' + soc + '%</div></div>' +
+        '<div class="card"><div class="clabel">CYCLES</div>' +
+        '<div class="cval" style="color:#aaa">' + data.cycles + '</div></div>' +
+      '</div>' +
+      '<div class="clabel">CELL VOLTAGES (mV)</div>' +
+      '<div class="cells">' + cellsHtml + '</div>' +
+      '<div class="time">Last update: ' + now + '</div>';
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>WeHear BMS</title>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <style>
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { background:#111; color:#eee; font-family:monospace; padding:16px; }
+    h1 { color:#4af; font-size:20px; margin-bottom:4px; }
+    .sub { color:#666; font-size:12px; margin-bottom:12px; }
+    .status { font-size:12px; margin-bottom:12px; padding:8px 12px; border-radius:6px; background:#1a1a1a; }
+    .online  { color:#0f0; }
+    .offline { color:#f44; }
+    .unknown { color:#fa0; }
+    .hbbox { background:#1a1a2a; border:1px solid #334; border-radius:8px; padding:10px 14px; margin-bottom:12px; font-size:11px; color:#666; }
+    .hb-alive { color:#0f0; }
+    .hb-dead  { color:#f44; }
+    .box { background:#1a1a1a; border:1px solid #333; border-radius:8px; padding:14px; margin-bottom:12px; }
+    .boxtitle { color:#fa0; font-size:15px; margin-bottom:10px; }
+    .row { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:10px; }
+    .card { background:#222; border-radius:6px; padding:8px 12px; min-width:90px; }
+    .clabel { color:#666; font-size:10px; }
+    .cval { font-size:18px; font-weight:bold; color:#0f0; }
+    .cells { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
+    .cell { background:#222; border-radius:4px; padding:3px 6px; font-size:11px; }
+    .nodata { color:#555; font-style:italic; }
+    .fresh  { color:#444; font-size:11px; margin-top:6px; }
+    .stale  { color:#f44; font-size:11px; margin-top:6px; }
+    .fault  { color:#f44; font-size:11px; margin-top:4px; }
+    .info   { color:#666; font-size:11px; margin-top:4px; }
+    .temps  { color:#4af; font-size:11px; margin-top:4px; }
+    .greenbox { background:#1a2a1a; border:1px solid #2a4a2a; border-radius:8px; padding:14px; margin-bottom:12px; }
+    .greenbox h3 { color:#0f0; margin-bottom:10px; }
+    .btn { background:#1a3a1a; border:1px solid #0f0; color:#0f0; padding:8px 16px; border-radius:6px; cursor:pointer; font-family:monospace; font-size:13px; margin-right:8px; margin-bottom:6px; }
+    .btn:hover { background:#0f0; color:#000; }
+    .btn-red  { background:#3a1a1a; border:1px solid #f44; color:#f44; }
+    .btn-red:hover  { background:#f44; color:#000; }
+    .btn-blue { background:#1a1a3a; border:1px solid #4af; color:#4af; }
+    .btn-blue:hover { background:#4af; color:#000; }
+    .btn-sm { padding:5px 10px; font-size:11px; }
+    .otastatus { color:#fa0; font-size:12px; margin-top:10px; min-height:18px; }
+    .bridgebox { background:#1a1a2a; border:1px solid #446; border-radius:8px; padding:14px; margin-bottom:12px; }
+    .bridgebox h3 { color:#4af; margin-bottom:10px; }
+    .bridgeinput { background:#222; border:1px solid #444; color:#eee; padding:8px 10px; border-radius:4px; font-family:monospace; font-size:12px; width:100%; margin-bottom:8px; }
+    .bridgeresult { background:#0a0a0a; border:1px solid #333; border-radius:4px; padding:8px; font-size:11px; color:#0f0; margin-top:10px; min-height:40px; word-break:break-all; display:none; }
+    .quicklinks { margin-top:8px; }
+    .quicklinks a { color:#4af; font-size:11px; margin-right:10px; text-decoration:none; }
+    .quicklinks a:hover { color:#fff; }
+    .divider { border:none; border-top:1px solid #222; margin:10px 0; }
+  </style>
+</head>
+<body>
+
+<h1>WeHear BMS Monitor</h1>
+<div class="sub">Live data via MQTT — broker.hivemq.com</div>
+
+<!-- ESP32 status -->
+<div class="status unknown" id="esp32status">Connecting to broker...</div>
+
+<!-- Heartbeat -->
+<div class="hbbox">
+  Heartbeat: <span id="hbtext" class="unknown">waiting...</span>
+</div>
+
+<!-- OTA Control -->
+<div class="greenbox">
+  <h3>Remote Firmware Update</h3>
+  <button class="btn"          onclick="sendCmd('update')">Flash New Firmware</button>
+  <button class="btn btn-red"  onclick="sendCmd('restart')">Restart ESP32</button>
+  <button class="btn btn-blue" onclick="sendCmd('status')">Get Status</button>
+  <div class="otastatus" id="otastatus">—</div>
+</div>
+
+<!-- RS485 Bridge -->
+<div class="bridgebox">
+  <h3>RS485 Bridge — Send Raw Frame to BMS</h3>
+  <div class="info" style="margin-bottom:8px;">
+    Type any hex request frame → ESP32 forwards to BMS → raw response appears below
+  </div>
+  <input class="bridgeinput" type="text" id="hexframe"
+         placeholder="01 78 10 00 10 A0 00 00 7F B2">
+  <div>
+    <button class="btn btn-blue" onclick="sendBridge()">Send to BMS</button>
+    <button class="btn btn-blue btn-sm" onclick="clearResponse()">Clear</button>
+  </div>
+  <div class="quicklinks">
+    <span style="color:#444;font-size:11px;">Quick: </span>
+    <a href="#" onclick="setFrame('01 78 10 00 10 A0 00 00 7F B2')">Pack1 Data</a>
+    <a href="#" onclick="setFrame('02 78 10 00 10 A0 00 00 3F A7')">Pack2 Data</a>
+    <a href="#" onclick="setFrame('03 78 10 00 10 A0 00 00 FE 6B')">Pack3 Data</a>
+    <a href="#" onclick="setFrame('04 78 10 00 10 A0 00 00 BF 8D')">Pack4 Data</a>
+    <a href="#" onclick="setFrame('01 78 28 00 28 0F 00 00 46 4B')">Pack1 Temp</a>
+    <a href="#" onclick="setFrame('02 78 28 00 28 0F 00 00 06 5E')">Pack2 Temp</a>
+    <a href="#" onclick="setFrame('03 78 28 00 28 0F 00 00 C7 92')">Pack3 Temp</a>
+    <a href="#" onclick="setFrame('04 78 28 00 28 0F 00 00 86 74')">Pack4 Temp</a>
+  </div>
+  <div class="bridgeresult" id="bridgeresult"></div>
+  <div id="bridgestatus" style="color:#fa0;font-size:11px;margin-top:6px;"></div>
+</div>
+
+<!-- Pack cards -->
+<div id="pack1" class="box"><div class="boxtitle">PACK 1</div><div class="nodata" id="p1data">No data yet</div></div>
+<div id="pack2" class="box"><div class="boxtitle">PACK 2</div><div class="nodata" id="p2data">No data yet</div></div>
+<div id="pack3" class="box"><div class="boxtitle">PACK 3</div><div class="nodata" id="p3data">No data yet</div></div>
+<div id="pack4" class="box"><div class="boxtitle">PACK 4</div><div class="nodata" id="p4data">No data yet</div></div>
+
+<script>
+  var BASE   = 'wepower/paritosh/bms';
+  var client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt', {
+    clientId: 'WeHear_Web_' + Math.random().toString(16).substr(2,8),
+    keepalive: 60,
+    reconnectPeriod: 3000
+  });
+
+  var packReceiveTime = {1:0, 2:0, 3:0, 4:0};
+  var lastHeartbeat   = 0;
+
+  // ── Broker connection ──────────────────
+  client.on('connect', function() {
+    document.getElementById('esp32status').textContent =
+      'Broker connected — waiting for ESP32...';
+    document.getElementById('esp32status').className = 'status unknown';
+
+    client.subscribe(BASE + '/pack1');
+    client.subscribe(BASE + '/pack2');
+    client.subscribe(BASE + '/pack3');
+    client.subscribe(BASE + '/pack4');
+    client.subscribe(BASE + '/ota');
+    client.subscribe(BASE + '/status');
+    client.subscribe(BASE + '/heartbeat');
+    client.subscribe(BASE + '/bridge/response');
+    client.subscribe(BASE + '/bridge/status');
+  });
+
+  client.on('error', function(err) {
+    document.getElementById('esp32status').textContent = 'Broker error: ' + err;
+    document.getElementById('esp32status').className   = 'status offline';
+  });
+
+  client.on('offline', function() {
+    document.getElementById('esp32status').textContent = 'Browser disconnected — reconnecting...';
+    document.getElementById('esp32status').className   = 'status offline';
+  });
+
+  // ── Message handler ────────────────────
+  client.on('message', function(topic, message) {
+    var payload = message.toString();
+
+    // OTA status
+    if (topic === BASE + '/ota') {
+      document.getElementById('otastatus').textContent = 'OTA: ' + payload;
+      return;
+    }
+
+    // ESP32 status (LWT)
+    if (topic === BASE + '/status') {
+      var isOnline  = payload.indexOf('online')  !== -1;
+      var isOffline = payload.indexOf('offline') !== -1;
+      if (isOffline) {
+        document.getElementById('esp32status').textContent = 'ESP32 OFFLINE — powered off or lost WiFi';
+        document.getElementById('esp32status').className   = 'status offline';
+      } else if (isOnline) {
+        document.getElementById('esp32status').textContent = 'ESP32 ONLINE — ' + payload;
+        document.getElementById('esp32status').className   = 'status online';
+      }
+      return;
+    }
+
+    // Heartbeat
+    if (topic === BASE + '/heartbeat') {
+      lastHeartbeat = Math.floor(Date.now() / 1000);
+      document.getElementById('hbtext').textContent =
+        payload + ' | ' + new Date().toLocaleTimeString();
+      document.getElementById('hbtext').className = 'hb-alive';
+      var s = document.getElementById('esp32status');
+      if (s.className === 'status unknown') {
+        s.textContent = 'ESP32 ONLINE — heartbeat confirmed';
+        s.className   = 'status online';
+      }
+      return;
+    }
+
+    // Bridge response
+    if (topic === BASE + '/bridge/response') {
+      var el = document.getElementById('bridgeresult');
+      el.style.display = 'block';
+      el.textContent   = 'RESPONSE (' + payload.split(' ').length + ' bytes):\n' + payload;
+      document.getElementById('bridgestatus').textContent =
+        'Got ' + payload.split(' ').length + ' bytes at ' +
+        new Date().toLocaleTimeString();
+      return;
+    }
+
+    // Bridge status
+    if (topic === BASE + '/bridge/status') {
+      document.getElementById('bridgestatus').textContent = payload;
+      return;
+    }
+
+    // Pack data
+    var packNum = parseInt(topic.slice(-1));
+    if (isNaN(packNum) || packNum < 1 || packNum > 4) return;
+
+    var divId = 'p' + packNum + 'data';
+    packReceiveTime[packNum] = Math.floor(Date.now() / 1000);
+
+    // Parse key:value pairs
+    var data = {};
+    payload.split(',').forEach(function(pair) {
+      var parts = pair.split(':');
+      if (parts.length >= 2) data[parts[0]] = parts[1];
+    });
+
+    var now      = new Date().toLocaleTimeString();
+    var curr     = parseFloat(data.current) || 0;
+    var iColor   = curr > 0 ? '#4af' : curr < 0 ? '#f80' : '#0f0';
+    var status   = data.status || 'idle';
+    var iLabel   = status.toUpperCase();
+    var soc      = parseFloat(data.soc) || 0;
+    var socColor = soc > 50 ? '#0f0' : soc > 20 ? '#fa0' : '#f44';
+    var ageESP   = parseInt(data.age) || 0;
+    var isStale  = ageESP > 60;
+
+    // Cell voltages
+    var cellsHtml = '';
+    for (var c = 1; c <= 16; c++) {
+      if (data['c'+c]) {
+        var mv = parseInt(data['c'+c]);
+        var cc = mv > 3400 ? '#f80' : mv < 3000 ? '#f44' : '#0f0';
+        cellsHtml += '<span class="cell" style="color:'+cc+'">C'+c+':'+mv+'</span>';
+      }
+    }
+
+    // Fault description
+    var faultCode = parseInt(data.fault) || 0;
+    var faultHtml = '';
+    if (faultCode > 0) {
+      var faults = [];
+      var names = ['CellOV','CellUV','PackOV','PackUV','ChgOC1','ChgOC2',
+                   'DsgOC1','DsgOC2','ChgHT','ChgLT','DsgHT','DsgLT',
+                   'MOSHT','AmbHT','AmbLT','CellDiff','','LowSOC','ShortCircuit'];
+      for (var b = 0; b < names.length; b++) {
+        if (names[b] && (faultCode & (1<<b))) faults.push(names[b]);
+      }
+      if (faults.length > 0)
+        faultHtml = '<div class="fault">FAULT: ' + faults.join(' ') + '</div>';
+    }
+
+    // Temperatures
+    var tempHtml = '';
+    var temps = [];
+    for (var t = 1; t <= 4; t++) {
+      if (data['t'+t]) temps.push('T'+t+':'+data['t'+t]+'°C');
+    }
+    if (temps.length > 0 || data.mostemp || data.ambtemp) {
+      tempHtml = '<div class="temps">Temps: ' + temps.join(' ');
+      if (data.mostemp) tempHtml += ' | MOS:'+data.mostemp+'°C';
+      if (data.ambtemp) tempHtml += ' Amb:'+data.ambtemp+'°C';
+      tempHtml += '</div>';
+    }
+
+    // Age indicator
+    var ageHtml = isStale
+      ? '<div class="stale">STALE — BMS data is '+ageESP+'s old</div>'
+      : '<div class="fresh">Live — '+ageESP+'s old | updated: '+now+'</div>';
+
+    document.getElementById(divId).innerHTML =
+      '<div class="row">' +
+        '<div class="card"><div class="clabel">VOLTAGE</div>' +
+        '<div class="cval">'+(data.voltage||'--')+'V</div></div>' +
+
+        '<div class="card"><div class="clabel">CURRENT ('+iLabel+')</div>' +
+        '<div class="cval" style="color:'+iColor+'">'+
+        Math.abs(curr).toFixed(2)+'A</div></div>' +
+
+        '<div class="card"><div class="clabel">SOC</div>' +
+        '<div class="cval" style="color:'+socColor+'">'+soc.toFixed(1)+'%</div></div>' +
+
+        '<div class="card"><div class="clabel">SOH</div>' +
+        '<div class="cval" style="color:#4af">'+(data.soh||'--')+'%</div></div>' +
+
+        '<div class="card"><div class="clabel">CYCLES</div>' +
+        '<div class="cval" style="color:#aaa">'+(data.cycles||'--')+'</div></div>' +
+
+        '<div class="card"><div class="clabel">REMAIN</div>' +
+        '<div class="cval">'+(data.remain||'--')+'Ah</div></div>' +
+      '</div>' +
+
+      (cellsHtml ? '<div class="clabel">CELL VOLTAGES (mV)</div>' +
+       '<div class="cells">'+cellsHtml+'</div>' : '') +
+
+      (data.maxcell ? '<div class="info">Max:'+data.maxcell+
+       'mV | Min:'+data.mincell+'mV | Diff:'+data.diff+'mV</div>' : '') +
+
+      tempHtml +
+
+      (data.chgvlim ? '<div class="info">Charger: '+data.chgvlim+
+       'V/'+data.chgalim+'A | Inverter: '+data.dsgvlim+
+       'V/'+data.dsgalim+'A</div>' : '') +
+
+      faultHtml +
+      ageHtml;
+  });
+
+  // ── Heartbeat watchdog ─────────────────
+  setInterval(function() {
+    var now = Math.floor(Date.now() / 1000);
+    if (lastHeartbeat > 0 && (now - lastHeartbeat) > 60) {
+      document.getElementById('esp32status').textContent =
+        'ESP32 OFFLINE — no heartbeat for ' + (now-lastHeartbeat) + 's';
+      document.getElementById('esp32status').className = 'status offline';
+      document.getElementById('hbtext').textContent =
+        'Last seen ' + (now-lastHeartbeat) + 's ago';
+      document.getElementById('hbtext').className = 'hb-dead';
+    }
+  }, 10000);
+
+  // ── OTA / system commands ──────────────
+  function sendCmd(cmd) {
+    if (!confirm('Send command to ESP32: ' + cmd + '?')) return;
+    if (client.connected) {
+      client.publish(BASE + '/cmd', cmd);
+      document.getElementById('otastatus').textContent =
+        'Command sent: ' + cmd + ' — waiting...';
+    } else {
+      alert('Not connected to broker!');
+    }
+  }
+
+  // ── Bridge functions ───────────────────
+  function sendBridge() {
+    var frame = document.getElementById('hexframe').value.trim();
+    if (!frame) { alert('Enter a hex frame first!'); return; }
+    if (!client.connected) { alert('Not connected to broker!'); return; }
+
+    document.getElementById('bridgestatus').textContent =
+      'Sending to ESP32...';
+    document.getElementById('bridgeresult').style.display = 'none';
+
+    client.publish(BASE + '/bridge/request', frame);
+  }
+
+  function setFrame(f) {
+    document.getElementById('hexframe').value = f;
+    document.getElementById('bridgeresult').style.display = 'none';
+    document.getElementById('bridgestatus').textContent = '';
+  }
+
+  function clearResponse() {
+    document.getElementById('bridgeresult').style.display = 'none';
+    document.getElementById('bridgestatus').textContent   = '';
+    document.getElementById('hexframe').value             = '';
+  }
+</script>
+</body>
+</html>
